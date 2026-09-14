@@ -1,0 +1,41 @@
+﻿<!-- Godot MVU 读取 · 宿主片段
+     1) 把本文件连同 Godot 的 web/ 目录一起上传静态托管；
+        web/ 建议放 GitHub Pages（index.wasm 37.7MB，超 jsdelivr 20MB 限制）。
+     2) 酒馆「正则/界面」里用 $('body').load() 加载本文件（见下方注释）：
+          <body><script>
+          $('body').load('https://<你的托管域名>/host.html')
+          </script></body>
+     3) 把 https://happy233666.github.io/godot-mvu-test 换成 web/index.html 所在目录的绝对地址（末尾不带 /index.html）。
+ -->
+<div id="mvu-godot-host" style="width:100%;">
+  <iframe id="mvu-godot-frame"
+          src="https://happy233666.github.io/godot-mvu-test/index.html"
+          style="width:100%;height:660px;border:1px solid #2a2f3a;border-radius:8px;background:#000;"
+          allow="autoplay; fullscreen"></iframe>
+</div>
+<script>
+(function () {
+  var SOURCE = 'godot-mvu';
+
+  // 读取当前消息楼层的 MVU stat_data（酒馆助手预注入的 getVariables / _ / getCurrentMessageId）
+  function readStatData() {
+    var vars = getVariables({ type: 'message', message_id: getCurrentMessageId() });
+    return _.get(vars, 'stat_data', {});
+  }
+
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (typeof d === 'string') {
+      try { d = JSON.parse(d); } catch (err) { return; }
+    }
+    if (!d || d.source !== SOURCE || d.action !== 'read') return;
+    var reply;
+    try {
+      reply = JSON.stringify({ source: SOURCE, action: 'data', ok: true, data: readStatData() });
+    } catch (err) {
+      reply = JSON.stringify({ source: SOURCE, action: 'data', ok: false, error: String(err) });
+    }
+    e.source.postMessage(reply, '*');
+  });
+})();
+</script>
