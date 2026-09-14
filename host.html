@@ -1,12 +1,14 @@
-<!-- Godot MVU 读取 / 写回楼层 · 宿主片段（已部署到 GitHub Pages）
+<!-- Godot ↔ 酒馆 交互宿主片段（已部署到 GitHub Pages）
      用法：在酒馆「正则/界面」或消息代码块中加载本文件：
        <body><script>
        $('body').load('https://happy233666.github.io/godot-mvu-test/host.html')
        </script></body>
      本文件运行在酒馆助手消息 iframe（同源），负责：
-       - 读取 MVU stat_data（getVariables）
-       - 写入楼层（createChatMessages / setChatMessages）
-       - 读取楼层（getChatMessages）
+       - 读 MVU stat_data        getVariables
+       - 写回 MVU stat_data      updateVariablesWith
+       - 新建楼层                createChatMessages
+       - 追加到当前楼层          setChatMessages + getChatMessages
+       - 读取最后一楼            getChatMessages
      再把结果通过 postMessage 发给跨域的 Godot iframe。 -->
 <div id="mvu-godot-host" style="width:100%;">
   <iframe id="mvu-godot-frame"
@@ -19,8 +21,9 @@
   var SOURCE = 'godot-mvu';
 
   function reply(to, obj) { to.postMessage(JSON.stringify(obj), '*'); }
+  function msgOption() { return { type: 'message', message_id: getCurrentMessageId() }; }
   function readStatData() {
-    var vars = getVariables({ type: 'message', message_id: getCurrentMessageId() });
+    var vars = getVariables(msgOption());
     return _.get(vars, 'stat_data', {});
   }
 
@@ -31,37 +34,64 @@
     }
     if (!d || d.source !== SOURCE) return;
 
-    if (d.action === 'read') {
-      try { reply(e.source, { source: SOURCE, action: 'data', ok: true, data: readStatData() }); }
-      catch (err) { reply(e.source, { source: SOURCE, action: 'data', ok: false, error: String(err) }); }
-      return;
-    }
+    switch (d.action) {
+      // ---- 读 MVU 变量 ----
+      case 'read':
+        try { reply(e.source, { source: SOURCE, action: 'data', ok: true, data: readStatData() }); }
+        catch (err) { reply(e.source, { source: SOURCE, action: 'data', ok: false, error: String(err) }); }
+        break;
 
-    // 写回楼层：在聊天末尾新建一条消息（让 AI 有上下文）
-    if (d.action === 'message') {
-      var role = (d.role === 'user' || d.role === 'assistant') ? d.role : 'system';
-      var text = String(d.text == null ? '' : d.text);
-      Promise.resolve()
-        .then(function () { return createChatMessages([{ role: role, message: text }]); })
-        .then(function () {
-          var lastId = (typeof getLastMessageId === 'function') ? getLastMessageId() : -1;
-          reply(e.source, { source: SOURCE, action: 'message-result', ok: true, message_id: lastId, role: role, text: text });
-        })
-        .catch(function (err) {
-          reply(e.source, { source: SOURCE, action: 'message-result', ok: false, error: String(err) });
-        });
-      return;
-    }
+      // ---- 写回 MVU 变量（覆盖整个 stat_data）----
+      case 'write-vars':
+        Promise.resolve()
+          .then(function () {
+            var newData = (d.stat_data && typeof d.stat_data === 'object') ? d.stat_data : {};
+            updateVariablesWith(function (vars) { vars.stat_data = newData; return vars; }, msgOption());
+          })
+          .then(function () {
+            reply(e.source, { source: SOURCE, action: 'write-vars-result', ok: true, data: readStatData() });
+          })
+          .catch(function (err) {
+            reply(e.source, { source: SOURCE, action: 'write-vars-result', ok: false, error: String(err) });
+          });
+        break;
 
-    // 读取最后一楼，确认写入结果
-    if (d.action === 'read-last') {
-      try {
-        var m = getChatMessages(-1)[0] || {};
-        reply(e.source, { source: SOURCE, action: 'last-message', ok: true, message_id: m.message_id, role: m.role, message: m.message });
-      } catch (err) {
-        reply(e.source, { source: SOURCE, action: 'last-message', ok: false, error: String(err) });
-      }
-      return;
+      // ---- 新建楼层 ----
+      case 'message':
+        var role = (d.role === 'user' || d.role === 'assistant') ? d.role : 'system';
+        var text = String(d.text == null ? '' : d.text);
+        Promise.resolve()
+          .then(function () { return createChatMessages([{ role: role, message: text }]); })
+          .then(function () {
+            var lastId = (typeof getLastMessageId === 'function') ? getLastMessageId() : -1;
+            reply(e.source, { source: SOURCE, action: 'message-result', ok: true, message_id: lastId, role: role, text: text });
+          })
+          .catch(function (err) { reply(e.source, { source: SOURCE, action: 'message-result', ok: false, error: String(err) }); });
+        break;
+
+      // ---- 追加到当前楼层（setChatMessages）----
+      case 'edit-floor':
+        Promise.resolve()
+          .then(function () {
+            var id = getCurrentMessageId();
+            var cur = getChatMessages(id)[0] || {};
+            var add = String(d.appendText == null ? '' : d.appendText);
+            var next = String(cur.message || '');
+            if (add) next = next ? (next + '\n\n' + add) : add;
+            return setChatMessages([{ message_id: id, message: next }], { refresh: 'affected' }).then(function () {
+              reply(e.source, { source: SOURCE, action: 'edit-floor-result', ok: true, message_id: id, message: next });
+            });
+          })
+          .catch(function (err) { reply(e.source, { source: SOURCE, action: 'edit-floor-result', ok: false, error: String(err) }); });
+        break;
+
+      // ---- 读取最后一楼 ----
+      case 'read-last':
+        try {
+          var m = getChatMessages(-1)[0] || {};
+          reply(e.source, { source: SOURCE, action: 'last-message', ok: true, message_id: m.message_id, role: m.role, message: m.message });
+        } catch (err) { reply(e.source, { source: SOURCE, action: 'last-message', ok: false, error: String(err) }); }
+        break;
     }
   });
 })();
