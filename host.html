@@ -1,10 +1,13 @@
-<!-- Godot MVU 读取 · 宿主片段（已部署到 GitHub Pages）
+<!-- Godot MVU 读取 / 写回楼层 · 宿主片段（已部署到 GitHub Pages）
      用法：在酒馆「正则/界面」或消息代码块中加载本文件：
        <body><script>
        $('body').load('https://happy233666.github.io/godot-mvu-test/host.html')
        </script></body>
-     本文件运行在酒馆助手消息 iframe（同源，可直接访问 getVariables / _ / getCurrentMessageId），
-     读取 MVU stat_data 后，通过 postMessage 发给跨域的 Godot iframe。 -->
+     本文件运行在酒馆助手消息 iframe（同源），负责：
+       - 读取 MVU stat_data（getVariables）
+       - 写入楼层（createChatMessages / setChatMessages）
+       - 读取楼层（getChatMessages）
+     再把结果通过 postMessage 发给跨域的 Godot iframe。 -->
 <div id="mvu-godot-host" style="width:100%;">
   <iframe id="mvu-godot-frame"
           src="https://happy233666.github.io/godot-mvu-test/index.html"
@@ -15,6 +18,7 @@
 (function () {
   var SOURCE = 'godot-mvu';
 
+  function reply(to, obj) { to.postMessage(JSON.stringify(obj), '*'); }
   function readStatData() {
     var vars = getVariables({ type: 'message', message_id: getCurrentMessageId() });
     return _.get(vars, 'stat_data', {});
@@ -25,14 +29,40 @@
     if (typeof d === 'string') {
       try { d = JSON.parse(d); } catch (err) { return; }
     }
-    if (!d || d.source !== SOURCE || d.action !== 'read') return;
-    var reply;
-    try {
-      reply = JSON.stringify({ source: SOURCE, action: 'data', ok: true, data: readStatData() });
-    } catch (err) {
-      reply = JSON.stringify({ source: SOURCE, action: 'data', ok: false, error: String(err) });
+    if (!d || d.source !== SOURCE) return;
+
+    if (d.action === 'read') {
+      try { reply(e.source, { source: SOURCE, action: 'data', ok: true, data: readStatData() }); }
+      catch (err) { reply(e.source, { source: SOURCE, action: 'data', ok: false, error: String(err) }); }
+      return;
     }
-    e.source.postMessage(reply, '*');
+
+    // 写回楼层：在聊天末尾新建一条消息（让 AI 有上下文）
+    if (d.action === 'message') {
+      var role = (d.role === 'user' || d.role === 'assistant') ? d.role : 'system';
+      var text = String(d.text == null ? '' : d.text);
+      Promise.resolve()
+        .then(function () { return createChatMessages([{ role: role, message: text }]); })
+        .then(function () {
+          var lastId = (typeof getLastMessageId === 'function') ? getLastMessageId() : -1;
+          reply(e.source, { source: SOURCE, action: 'message-result', ok: true, message_id: lastId, role: role, text: text });
+        })
+        .catch(function (err) {
+          reply(e.source, { source: SOURCE, action: 'message-result', ok: false, error: String(err) });
+        });
+      return;
+    }
+
+    // 读取最后一楼，确认写入结果
+    if (d.action === 'read-last') {
+      try {
+        var m = getChatMessages(-1)[0] || {};
+        reply(e.source, { source: SOURCE, action: 'last-message', ok: true, message_id: m.message_id, role: m.role, message: m.message });
+      } catch (err) {
+        reply(e.source, { source: SOURCE, action: 'last-message', ok: false, error: String(err) });
+      }
+      return;
+    }
   });
 })();
 </script>
