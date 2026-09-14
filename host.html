@@ -1,19 +1,20 @@
 <!-- Godot ↔ 酒馆 交互宿主片段（已部署到 GitHub Pages）
-     用法：在酒馆「正则/界面」或消息代码块中加载本文件：
+     用法：在酒馆「正则/界面」或消息代码块中加载本文件。
+     注意加 ?t= 时间戳，避免 Tauri/WebView 缓存旧版本：
        <body><script>
-       $('body').load('https://happy233666.github.io/godot-mvu-test/host.html')
+       $('body').load('https://happy233666.github.io/godot-mvu-test/host.html?t=' + Date.now())
        </script></body>
+     游戏本体放在带版本号的目录（当前 v1），每次更新换新目录，彻底绕开 CDN 缓存。
      本文件运行在酒馆助手消息 iframe（同源），负责：
        - 读 MVU stat_data        getVariables
        - 写回 MVU stat_data      updateVariablesWith
        - 新建楼层                createChatMessages
        - 追加到当前楼层          setChatMessages + getChatMessages
-       - 读取最后一楼            getChatMessages
      再把结果通过 postMessage 发给跨域的 Godot iframe。 -->
 <div id="mvu-godot-host" style="width:100%;">
   <iframe id="mvu-godot-frame"
-          src="https://happy233666.github.io/godot-mvu-test/index.html"
-          style="width:100%;height:660px;border:1px solid #2a2f3a;border-radius:8px;background:#000;"
+          src="https://happy233666.github.io/godot-mvu-test/v1/index.html"
+          style="width:100%;height:780px;border:1px solid #2a2f3a;border-radius:8px;background:#000;"
           allow="autoplay; fullscreen"></iframe>
 </div>
 <script>
@@ -35,13 +36,11 @@
     if (!d || d.source !== SOURCE) return;
 
     switch (d.action) {
-      // ---- 读 MVU 变量 ----
       case 'read':
         try { reply(e.source, { source: SOURCE, action: 'data', ok: true, data: readStatData() }); }
         catch (err) { reply(e.source, { source: SOURCE, action: 'data', ok: false, error: String(err) }); }
         break;
 
-      // ---- 写回 MVU 变量（覆盖整个 stat_data）----
       case 'write-vars':
         Promise.resolve()
           .then(function () {
@@ -56,7 +55,6 @@
           });
         break;
 
-      // ---- 新建楼层 ----
       case 'message':
         var role = (d.role === 'user' || d.role === 'assistant') ? d.role : 'system';
         var text = String(d.text == null ? '' : d.text);
@@ -69,7 +67,6 @@
           .catch(function (err) { reply(e.source, { source: SOURCE, action: 'message-result', ok: false, error: String(err) }); });
         break;
 
-      // ---- 追加到当前楼层（setChatMessages）----
       case 'edit-floor':
         Promise.resolve()
           .then(function () {
@@ -85,7 +82,6 @@
           .catch(function (err) { reply(e.source, { source: SOURCE, action: 'edit-floor-result', ok: false, error: String(err) }); });
         break;
 
-      // ---- 读取最后一楼 ----
       case 'read-last':
         try {
           var m = getChatMessages(-1)[0] || {};
